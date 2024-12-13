@@ -1,0 +1,34 @@
+[tool.poetry]
+name = "ntpi-screen"
+version = "0.1.0"
+description = ""
+authors = ["Kieran David Evans <keyz182@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+
+packages = [
+  { include = "ntpi_screen" }
+]
+
+[tool.poetry.scripts]
+ntpi-screen = "ntpi_screen.cli:app"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+typer = "^0.15.1"
+adafruit-circuitpython-displayio-sh1106 = "^1.4.1"
+adafruit-python-shell = "^1.8.1"
+adafruit-blinka = "^8.50.0"
+adafruit-circuitpython-rgb-display = "^3.12.6"
+adafruit-blinka-displayio = "^2.1.2"
+adafruit-circuitpython-display-text = "^3.2.0"
+rpi-lgpio = "^0.6"
+py-gpsd2 = "^0.1.0"
+
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.8.3"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

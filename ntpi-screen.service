@@ -1,0 +1,14 @@
+[Unit]
+Description=NTPi-Screen
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=1
+User=root
+ExecStart=/home/pi/.cache/pypoetry/virtualenvs/ntpi-screen-fsBaOsbm-py3.11/bin/ntpi-screen
+
+[Install]
+WantedBy=multi-user.target
