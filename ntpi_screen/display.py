@@ -38,7 +38,7 @@ class Display(threading.Thread):
             baudrate=1000000,
         )
 
-        self.display = adafruit_displayio_sh1106.SH1106(self.display_bus, width=self.WIDTH, height=self.HEIGHT, rotation=180, auto_refresh=True)
+        self.display = adafruit_displayio_sh1106.SH1106(self.display_bus, width=self.WIDTH, height=self.HEIGHT, rotation=0, auto_refresh=True)
 
     def run(self) -> None:
         self.splash()
