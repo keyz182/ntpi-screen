@@ -331,6 +331,16 @@ files = [
 ]
 
 [[package]]
+name = "nut2"
+version = "2.1.1"
+description = "A Python abstraction class to access NUT servers."
+optional = false
+python-versions = "*"
+files = [
+    {file = "nut2-2.1.1.tar.gz", hash = "sha256:2166e827cec2a42cab89e9616407358698ad8b258a1f515fedc5a106ffc1f092"},
+]
+
+[[package]]
 name = "py-gpsd2"
 version = "0.1.0"
 description = "Python 3 library for working with gpsd"
@@ -513,4 +523,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "a938a7ede54006d5eea43fb53600e09bf94d10bfd722c23d6877a9ee4bc47178"
+content-hash = "46c473311c494cec279d705cf878dc69186768469f54028fbc3a6af0fc54f5ce"

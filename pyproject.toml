@@ -24,6 +24,7 @@ adafruit-blinka-displayio = "^2.1.2"
 adafruit-circuitpython-display-text = "^3.2.0"
 rpi-lgpio = "^0.6"
 py-gpsd2 = "^0.1.0"
+nut2 = "^2.1.1"
 
 
 [tool.poetry.group.dev.dependencies]

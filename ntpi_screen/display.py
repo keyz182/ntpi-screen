@@ -1,4 +1,5 @@
 import threading
+from typing import Dict
 import busio
 import board
 import displayio
@@ -23,11 +24,12 @@ class Display(threading.Thread):
         "3D Fix"
     ]
     
-    def __init__(self, gps_queue: queue.Queue) -> None:
+    def __init__(self, gps_queue: queue.Queue, nut_queue: queue.Queue) -> None:
         threading.Thread.__init__(self)
         displayio.release_displays()
         
         self.gps_queue = gps_queue
+        self.nut_queue = nut_queue
 
         self.spi = busio.SPI(board.SCLK, board.MOSI, board.MISO)
         self.display_bus = fourwire.FourWire(
@@ -133,6 +135,48 @@ class Display(threading.Thread):
                 terminalio.FONT, text=curtime, color=0xFFFFFF, x=5, y=46
             ))
                 
+            charge = 0
+            status = ""
+            
+            if not self.nut_queue.empty():
+                self.last_nut_reading: Dict = self.nut_queue.get_nowait()
+            
+            if self.last_nut_reading:
+                charge = int(self.last_nut_reading["battery.charge"])
+                status = self.last_nut_reading["ups.status"]
+            
+            
+            # Draw charge outline
+            charge_outline_bitmap = displayio.Bitmap(12, 30, 1)
+            charge_outline_palette = displayio.Palette(1)
+            charge_outline_palette[0] = 0xFFFFFF
+            charge_outline_sprite = displayio.TileGrid(
+                charge_outline_bitmap, pixel_shader=charge_outline_palette, x=104, y=6
+            )
+            primary.append(charge_outline_sprite)
+            
+            # clear inside
+            charge_inline_bitmap = displayio.Bitmap(10, 28, 1)
+            charge_inline_palette = displayio.Palette(1)
+            charge_inline_palette[0] = 0x000000
+            charge_inline_sprite = displayio.TileGrid(
+                charge_inline_bitmap, pixel_shader=charge_inline_palette, x=105, y=7
+            )
+            primary.append(charge_inline_sprite)
+            
+            # fill
+            fillHeight = round(26*(charge/100))
+            charge_fill_bitmap = displayio.Bitmap(8, fillHeight, 1)
+            charge_fill_palette = displayio.Palette(1)
+            charge_fill_palette[0] = 0xFFFFFF
+            charge_fill_sprite = displayio.TileGrid(
+                charge_fill_bitmap, pixel_shader=charge_fill_palette, x=106, y=8 + (26 - fillHeight)
+            )
+            primary.append(charge_fill_sprite)
+            
+            primary.append(label.Label(
+                terminalio.FONT, text=status, color=0xFFFFFF, x=105, y=46
+            ))
             
             # self.display.refresh()
             time.sleep(1/30)
