@@ -1,3 +1,4 @@
+import logging
 import queue
 import typer
 from ntpi_screen.display import Display
@@ -7,6 +8,8 @@ from ntpi_screen.nut import NUT
 import signal
 import sys
 
+logger = logging.getLogger(__name__)
+
 app = typer.Typer()
 
 gps_queue = queue.Queue(5)
@@ -14,11 +17,13 @@ nut_queue = queue.Queue(5)
 
 @app.command()
 def main() -> None:
+    logger.info("Starting ntpi-screen")
     display = Display(gps_queue, nut_queue)
     gps = GPS(gps_queue)
     nut = NUT(nut_queue)
     
     def signal_handler(sig, frame):
+        logger.info("Shutting down ntpi-screen")
         display.cancel()
         gps.cancel()
         nut.cancel()

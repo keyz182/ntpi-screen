@@ -25,6 +25,8 @@ adafruit-circuitpython-display-text = "^3.2.0"
 rpi-lgpio = "^0.6"
 py-gpsd2 = "^0.1.0"
 nut2 = "^2.1.1"
+log-rate-limit = "^1.4.2"
+pyyaml = "^6.0.2"
 
 
 [tool.poetry.group.dev.dependencies]

@@ -7,7 +7,8 @@ StartLimitIntervalSec=0
 Type=simple
 Restart=always
 RestartSec=1
-User=root
+User=pi
+WorkingDirectory=/home/pi/ntpi-screen/
 ExecStart=/path/to/venv/bin/ntpi-screen
 
 [Install]
