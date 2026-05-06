@@ -1,7 +1,8 @@
 [Unit]
 Description=NTPi-Screen
 After=network.target
-StartLimitIntervalSec=0
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -10,6 +11,13 @@ RestartSec=1
 User=pi
 WorkingDirectory=/home/pi/ntpi-screen/
 ExecStart=/path/to/venv/bin/ntpi-screen
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+# Cap memory: backstop in case any residual leak survives the static
+# scene-graph rewrite. MemoryHigh throttles before MemoryMax kills.
+MemoryHigh=128M
+MemoryMax=192M
 
 [Install]
 WantedBy=multi-user.target

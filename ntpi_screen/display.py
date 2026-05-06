@@ -1,39 +1,47 @@
 import logging
+import queue
 import threading
-from typing import Dict
-import busio
+from typing import Dict, Optional
+
 import board
+import busio
 import displayio
-import terminalio
-import time
 import fourwire
+import terminalio
 from adafruit_display_text import label
 import adafruit_displayio_sh1106
-import queue
 from gpsd2 import GpsResponse
 
 logger = logging.getLogger(__name__)
 
 
-class Display(threading.Thread):    
+class Display(threading.Thread):
     WIDTH = 128
     HEIGHT = 64
-    RUN = True
-    
+    FRAME_INTERVAL = 1 / 30  # 30 fps target
+
     MODE_MAP = [
         "UNKNOWN",
         "No Fix",
         "2D Fix",
-        "3D Fix"
+        "3D Fix",
     ]
-    
+
+    # Charge gauge geometry
+    CHARGE_FILL_W = 8
+    CHARGE_FILL_H = 26
+    CHARGE_FILL_X = 108
+    CHARGE_FILL_Y = 8
+
     def __init__(self, gps_queue: queue.Queue, nut_queue: queue.Queue) -> None:
-        threading.Thread.__init__(self)
+        threading.Thread.__init__(self, daemon=True)
         logger.info("Initialising display")
         displayio.release_displays()
-        
+
         self.gps_queue = gps_queue
         self.nut_queue = nut_queue
+
+        self._stop = threading.Event()
 
         self.spi = busio.SPI(board.SCLK, board.MOSI, board.MISO)
         self.display_bus = fourwire.FourWire(
@@ -44,133 +52,214 @@ class Display(threading.Thread):
             baudrate=1000000,
         )
 
-        self.display = adafruit_displayio_sh1106.SH1106(self.display_bus, width=self.WIDTH, height=self.HEIGHT, rotation=0, auto_refresh=True)
-        
-        self.last_gps_reading = None
-        self.last_nut_reading = None
+        # auto_refresh=False: we drive refresh manually to avoid races
+        # between background refresh thread and scene-graph mutation.
+        self.display = adafruit_displayio_sh1106.SH1106(
+            self.display_bus,
+            width=self.WIDTH,
+            height=self.HEIGHT,
+            rotation=0,
+            auto_refresh=False,
+        )
+
+        self.last_gps_reading: Optional[GpsResponse] = None
+        # Seed NUT so first frame has shape before NUT thread fetches.
+        self.last_nut_reading: Dict = {"battery.charge": 0, "ups.status": "INIT"}
+        self._last_fill_height: int = -1
+
+        self._splash_group: Optional[displayio.Group] = None
+        self._primary_group: Optional[displayio.Group] = None
+        self._gps_mode_label: Optional[label.Label] = None
+        self._lat_label: Optional[label.Label] = None
+        self._lon_label: Optional[label.Label] = None
+        self._sats_label: Optional[label.Label] = None
+        self._time_label: Optional[label.Label] = None
+        self._status_label: Optional[label.Label] = None
+        self._charge_fill_bitmap: Optional[displayio.Bitmap] = None
+
+    def cancel(self) -> None:
+        self._stop.set()
 
     def run(self) -> None:
-        self.splash()
-        time.sleep(1)
-        self.display_loop()
-    
-    def cancel(self) -> None:
-        self.RUN = False
-    
-    def splash(self) -> None:
-        # Make the display context
-        self.splash = displayio.Group()
-        self.display.root_group = self.splash
-
-        # Draw a label
-        text = "NTPi.DByZ.uk"
-        text_area = label.Label(
-            terminalio.FONT, text=text, color=0xFFFFFF, x=28, y=self.HEIGHT // 2 - 1
-        )
-        self.splash.append(text_area)
-        
-        # self.display.refresh()
-
-    def display_loop(self) -> None:
-        while self.RUN:
+        try:
+            self._show_splash()
+            self.display.refresh()
+            # Interruptible sleep so shutdown is prompt.
+            self._stop.wait(1.0)
+            if self._stop.is_set():
+                return
+            self._build_primary_scene()
+            self._display_loop()
+        finally:
             try:
-                primary = displayio.Group()
-                self.display.root_group = primary
-                color_bitmap = displayio.Bitmap(self.WIDTH, self.HEIGHT, 1)
-                color_palette = displayio.Palette(1)
-                color_palette[0] = 0xFFFFFF  # White
+                displayio.release_displays()
+            except Exception:
+                logger.exception("Exception releasing display on shutdown")
 
-                bg_sprite = displayio.TileGrid(color_bitmap, pixel_shader=color_palette, x=0, y=0)
-                primary.append(bg_sprite)
+    def _show_splash(self) -> None:
+        self._splash_group = displayio.Group()
+        self.display.root_group = self._splash_group
 
-                # Draw a smaller inner rectangle
-                inner_bitmap = displayio.Bitmap(self.WIDTH - 2, self.HEIGHT - 2, 1)
-                inner_palette = displayio.Palette(1)
-                inner_palette[0] = 0x000000  # Black
-                inner_sprite = displayio.TileGrid(
-                    inner_bitmap, pixel_shader=inner_palette, x=4, y=1
-                )
-                primary.append(inner_sprite)
+        text_area = label.Label(
+            terminalio.FONT,
+            text="NTPi.DByZ.uk",
+            color=0xFFFFFF,
+            x=28,
+            y=self.HEIGHT // 2 - 1,
+        )
+        self._splash_group.append(text_area)
 
-                
-                gps_mode = "Mode: "
-                pos_lat = "Lat: "
-                pos_lon = "Lon: "
-                sats = "Sats: "
-                curtime = "Time: "
-                date = "Date: "
+    def _build_primary_scene(self) -> None:
+        """Build the per-frame scene graph ONCE. Per-frame code mutates
+        label.text and the charge fill bitmap in place — no allocations."""
+        primary = displayio.Group()
+
+        # Outer white fill
+        bg_bitmap = displayio.Bitmap(self.WIDTH, self.HEIGHT, 1)
+        bg_palette = displayio.Palette(1)
+        bg_palette[0] = 0xFFFFFF
+        primary.append(displayio.TileGrid(bg_bitmap, pixel_shader=bg_palette, x=0, y=0))
+
+        # Inner black rect (preserves original asymmetric bevel intentionally)
+        inner_bitmap = displayio.Bitmap(self.WIDTH - 2, self.HEIGHT - 2, 1)
+        inner_palette = displayio.Palette(1)
+        inner_palette[0] = 0x000000
+        primary.append(
+            displayio.TileGrid(inner_bitmap, pixel_shader=inner_palette, x=4, y=1)
+        )
+
+        # GPS labels
+        self._gps_mode_label = label.Label(
+            terminalio.FONT, text="Mode: ", color=0xFFFFFF, x=7, y=9
+        )
+        self._lat_label = label.Label(
+            terminalio.FONT, text="Lat: ", color=0xFFFFFF, x=7, y=19
+        )
+        self._lon_label = label.Label(
+            terminalio.FONT, text="Lon: ", color=0xFFFFFF, x=7, y=29
+        )
+        self._sats_label = label.Label(
+            terminalio.FONT, text="Sats: ", color=0xFFFFFF, x=7, y=39
+        )
+        self._time_label = label.Label(
+            terminalio.FONT, text="Time: ", color=0xFFFFFF, x=7, y=49
+        )
+        primary.append(self._gps_mode_label)
+        primary.append(self._lat_label)
+        primary.append(self._lon_label)
+        primary.append(self._sats_label)
+        primary.append(self._time_label)
+
+        # Charge gauge: outline (white) 12x30 at (106,6)
+        outline_bitmap = displayio.Bitmap(12, 30, 1)
+        outline_palette = displayio.Palette(1)
+        outline_palette[0] = 0xFFFFFF
+        primary.append(
+            displayio.TileGrid(outline_bitmap, pixel_shader=outline_palette, x=106, y=6)
+        )
+
+        # Charge gauge: inner clear (black) 10x28 at (107,7)
+        inline_bitmap = displayio.Bitmap(10, 28, 1)
+        inline_palette = displayio.Palette(1)
+        inline_palette[0] = 0x000000
+        primary.append(
+            displayio.TileGrid(inline_bitmap, pixel_shader=inline_palette, x=107, y=7)
+        )
+
+        # Charge fill: fixed-size 8x26 bitmap. Pixels mutated per-update.
+        # Palette: 0=black, 1=white. Initially all-black (0% charge look).
+        fill_palette = displayio.Palette(2)
+        fill_palette[0] = 0x000000
+        fill_palette[1] = 0xFFFFFF
+        self._charge_fill_bitmap = displayio.Bitmap(
+            self.CHARGE_FILL_W, self.CHARGE_FILL_H, 2
+        )
+        primary.append(
+            displayio.TileGrid(
+                self._charge_fill_bitmap,
+                pixel_shader=fill_palette,
+                x=self.CHARGE_FILL_X,
+                y=self.CHARGE_FILL_Y,
+            )
+        )
+
+        self._status_label = label.Label(
+            terminalio.FONT, text="", color=0xFFFFFF, x=107, y=46
+        )
+        primary.append(self._status_label)
+
+        self._primary_group = primary
+        self.display.root_group = primary
+
+    def _update_charge_fill(self, fill_height: int) -> None:
+        """Redraw charge fill bitmap only when value changes."""
+        if fill_height == self._last_fill_height:
+            return
+        bm = self._charge_fill_bitmap
+        if bm is None:
+            return
+        threshold = self.CHARGE_FILL_H - fill_height
+        for y in range(self.CHARGE_FILL_H):
+            val = 1 if y >= threshold else 0
+            for x in range(self.CHARGE_FILL_W):
+                bm[x, y] = val
+        self._last_fill_height = fill_height
+
+    def _display_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                # Drain GPS queue (latest only)
                 if not self.gps_queue.empty():
-                    self.last_gps_reading: GpsResponse = self.gps_queue.get_nowait()
-                
-                if self.last_gps_reading:
-                    gps_mode += self.MODE_MAP[self.last_gps_reading.mode]
-                    pos_lat += f"{self.last_gps_reading.lat:.6f}"
-                    pos_lon += f"{self.last_gps_reading.lon:.6f}"
-                    sats += f"{self.last_gps_reading.sats_valid}/{self.last_gps_reading.sats}"
+                    self.last_gps_reading = self.gps_queue.get_nowait()
+
+                if self.last_gps_reading is not None:
+                    gps_mode = "Mode: " + self.MODE_MAP[self.last_gps_reading.mode]
+                    pos_lat = f"Lat: {self.last_gps_reading.lat:.6f}"
+                    pos_lon = f"Lon: {self.last_gps_reading.lon:.6f}"
+                    sats = f"Sats: {self.last_gps_reading.sats_valid}/{self.last_gps_reading.sats}"
                     split = self.last_gps_reading.time.split("T")
-                    date += split[0]
-                    curtime += split[1].split(".")[0]
-                    
-                primary.append(label.Label(
-                    terminalio.FONT, text=gps_mode, color=0xFFFFFF, x=7, y=9
-                ))
-                primary.append(label.Label(
-                    terminalio.FONT, text=pos_lat, color=0xFFFFFF, x=7, y=19
-                ))
-                primary.append(label.Label(
-                    terminalio.FONT, text=pos_lon, color=0xFFFFFF, x=7, y=29
-                ))
-                primary.append(label.Label(
-                    terminalio.FONT, text=sats, color=0xFFFFFF, x=7, y=39
-                ))
-                primary.append(label.Label(
-                    terminalio.FONT, text=curtime, color=0xFFFFFF, x=7, y=49
-                ))
-                    
-                charge = 0
-                status = ""
-                
+                    date_part = split[0] if len(split) > 0 else ""
+                    time_part = split[1].split(".")[0] if len(split) > 1 else ""
+                    cur_time = f"Time: {time_part}"
+                    _ = date_part  # currently unused on screen; kept for parity
+                else:
+                    gps_mode = "Mode: "
+                    pos_lat = "Lat: "
+                    pos_lon = "Lon: "
+                    sats = "Sats: "
+                    cur_time = "Time: "
+
+                # Mutate label text in place — no Group/Bitmap allocations.
+                if self._gps_mode_label is not None:
+                    self._gps_mode_label.text = gps_mode
+                if self._lat_label is not None:
+                    self._lat_label.text = pos_lat
+                if self._lon_label is not None:
+                    self._lon_label.text = pos_lon
+                if self._sats_label is not None:
+                    self._sats_label.text = sats
+                if self._time_label is not None:
+                    self._time_label.text = cur_time
+
+                # Drain NUT queue (latest only)
                 if not self.nut_queue.empty():
-                    self.last_nut_reading: Dict = self.nut_queue.get_nowait()
-                
-                if self.last_nut_reading:
-                    charge = int(self.last_nut_reading["battery.charge"])
-                    status = self.last_nut_reading["ups.status"]
-                
-                
-                # Draw charge outline
-                charge_outline_bitmap = displayio.Bitmap(12, 30, 1)
-                charge_outline_palette = displayio.Palette(1)
-                charge_outline_palette[0] = 0xFFFFFF
-                charge_outline_sprite = displayio.TileGrid(
-                    charge_outline_bitmap, pixel_shader=charge_outline_palette, x=106, y=6
+                    self.last_nut_reading = self.nut_queue.get_nowait()
+
+                charge = int(self.last_nut_reading.get("battery.charge", 0))
+                status = str(self.last_nut_reading.get("ups.status", ""))
+
+                fill_height = min(
+                    max(1, round(self.CHARGE_FILL_H * (charge / 100))),
+                    self.CHARGE_FILL_H,
                 )
-                primary.append(charge_outline_sprite)
-                
-                # clear inside
-                charge_inline_bitmap = displayio.Bitmap(10, 28, 1)
-                charge_inline_palette = displayio.Palette(1)
-                charge_inline_palette[0] = 0x000000
-                charge_inline_sprite = displayio.TileGrid(
-                    charge_inline_bitmap, pixel_shader=charge_inline_palette, x=107, y=7
-                )
-                primary.append(charge_inline_sprite)
-                
-                # fill
-                fillHeight = min(max(1, round(26*(charge/100))), 26) # keep within bounds
-                charge_fill_bitmap = displayio.Bitmap(8, fillHeight, 1)
-                charge_fill_palette = displayio.Palette(1)
-                charge_fill_palette[0] = 0xFFFFFF
-                charge_fill_sprite = displayio.TileGrid(
-                    charge_fill_bitmap, pixel_shader=charge_fill_palette, x=108, y=8 + (26 - fillHeight)
-                )
-                primary.append(charge_fill_sprite)
-                
-                primary.append(label.Label(
-                    terminalio.FONT, text=status, color=0xFFFFFF, x=107, y=46
-                ))
-            except Exception as e:
+                self._update_charge_fill(fill_height)
+
+                if self._status_label is not None:
+                    self._status_label.text = status
+
+                self.display.refresh()
+            except Exception:
                 logger.exception("Exception in display loop")
-                
-            # self.display.refresh()
-            time.sleep(1/30)
+
+            # Interruptible sleep — wakes on shutdown.
+            self._stop.wait(self.FRAME_INTERVAL)
