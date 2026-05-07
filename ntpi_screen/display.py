@@ -128,21 +128,47 @@ class Display(threading.Thread):
             displayio.TileGrid(inner_bitmap, pixel_shader=inner_palette, x=4, y=1)
         )
 
-        # GPS labels
+        # GPS labels. background_color forces opaque black behind glyphs
+        # so .text setter rebuild does not leave residue from prior text.
         self._gps_mode_label = label.Label(
-            terminalio.FONT, text="Mode: ", color=0xFFFFFF, x=7, y=9
+            terminalio.FONT,
+            text="Mode: ",
+            color=0xFFFFFF,
+            background_color=0x000000,
+            x=7,
+            y=9,
         )
         self._lat_label = label.Label(
-            terminalio.FONT, text="Lat: ", color=0xFFFFFF, x=7, y=19
+            terminalio.FONT,
+            text="Lat: ",
+            color=0xFFFFFF,
+            background_color=0x000000,
+            x=7,
+            y=19,
         )
         self._lon_label = label.Label(
-            terminalio.FONT, text="Lon: ", color=0xFFFFFF, x=7, y=29
+            terminalio.FONT,
+            text="Lon: ",
+            color=0xFFFFFF,
+            background_color=0x000000,
+            x=7,
+            y=29,
         )
         self._sats_label = label.Label(
-            terminalio.FONT, text="Sats: ", color=0xFFFFFF, x=7, y=39
+            terminalio.FONT,
+            text="Sats: ",
+            color=0xFFFFFF,
+            background_color=0x000000,
+            x=7,
+            y=39,
         )
         self._time_label = label.Label(
-            terminalio.FONT, text="Time: ", color=0xFFFFFF, x=7, y=49
+            terminalio.FONT,
+            text="Time: ",
+            color=0xFFFFFF,
+            background_color=0x000000,
+            x=7,
+            y=49,
         )
         primary.append(self._gps_mode_label)
         primary.append(self._lat_label)
@@ -184,7 +210,12 @@ class Display(threading.Thread):
         )
 
         self._status_label = label.Label(
-            terminalio.FONT, text="", color=0xFFFFFF, x=107, y=46
+            terminalio.FONT,
+            text="",
+            color=0xFFFFFF,
+            background_color=0x000000,
+            x=107,
+            y=46,
         )
         primary.append(self._status_label)
 
