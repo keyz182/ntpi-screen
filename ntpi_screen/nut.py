@@ -17,11 +17,11 @@ class NUT(threading.Thread):
         threading.Thread.__init__(self, daemon=True)
         logger.info("Initialising NUT")
         self.queue = queue
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
         self.client: Optional[PyNUTClient] = None
 
     def cancel(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
 
     def _connect(self) -> bool:
         try:
@@ -34,10 +34,10 @@ class NUT(threading.Thread):
             return False
 
     def run(self) -> None:
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             if self.client is None:
                 if not self._connect():
-                    self._stop.wait(self.RETRY_INTERVAL)
+                    self._stop_event.wait(self.RETRY_INTERVAL)
                     continue
 
             try:
@@ -52,4 +52,4 @@ class NUT(threading.Thread):
                 logger.exception("Exception fetching NUT data")
                 self.client = None  # force reconnect next cycle
 
-            self._stop.wait(self.POLL_INTERVAL)
+            self._stop_event.wait(self.POLL_INTERVAL)

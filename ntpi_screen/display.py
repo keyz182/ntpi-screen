@@ -41,7 +41,7 @@ class Display(threading.Thread):
         self.gps_queue = gps_queue
         self.nut_queue = nut_queue
 
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
 
         self.spi = busio.SPI(board.SCLK, board.MOSI, board.MISO)
         self.display_bus = fourwire.FourWire(
@@ -82,15 +82,15 @@ class Display(threading.Thread):
         self._label_text_cache: Dict[int, str] = {}
 
     def cancel(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
 
     def run(self) -> None:
         try:
             self._show_splash()
             self.display.refresh()
             # Interruptible sleep so shutdown is prompt.
-            self._stop.wait(1.0)
-            if self._stop.is_set():
+            self._stop_event.wait(1.0)
+            if self._stop_event.is_set():
                 return
             self._build_primary_scene()
             self._display_loop()
@@ -255,7 +255,7 @@ class Display(threading.Thread):
         self._last_fill_height = fill_height
 
     def _display_loop(self) -> None:
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             try:
                 # Drain GPS queue (latest only)
                 if not self.gps_queue.empty():
@@ -305,4 +305,4 @@ class Display(threading.Thread):
                 logger.exception("Exception in display loop")
 
             # Interruptible sleep — wakes on shutdown.
-            self._stop.wait(self.FRAME_INTERVAL)
+            self._stop_event.wait(self.FRAME_INTERVAL)

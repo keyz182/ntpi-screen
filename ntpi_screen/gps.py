@@ -15,11 +15,11 @@ class GPS(threading.Thread):
         threading.Thread.__init__(self, daemon=True)
         logger.info("Initialising GPS")
         self.queue = queue
-        self._stop = threading.Event()
+        self._stop_event = threading.Event()
         self._connected = False
 
     def cancel(self) -> None:
-        self._stop.set()
+        self._stop_event.set()
 
     def _connect(self) -> bool:
         try:
@@ -39,10 +39,10 @@ class GPS(threading.Thread):
             return False
 
     def run(self) -> None:
-        while not self._stop.is_set():
+        while not self._stop_event.is_set():
             if not self._connected:
                 if not self._connect():
-                    self._stop.wait(self.RETRY_INTERVAL)
+                    self._stop_event.wait(self.RETRY_INTERVAL)
                     continue
 
             if not self.queue.full():
@@ -55,4 +55,4 @@ class GPS(threading.Thread):
                     logger.exception("Exception fetching GPS data")
                     self._connected = False  # force reconnect next cycle
 
-            self._stop.wait(self.POLL_INTERVAL)
+            self._stop_event.wait(self.POLL_INTERVAL)
