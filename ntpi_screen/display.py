@@ -76,6 +76,10 @@ class Display(threading.Thread):
         self._time_label: Optional[label.Label] = None
         self._status_label: Optional[label.Label] = None
         self._charge_fill_bitmap: Optional[displayio.Bitmap] = None
+        # Cache last text per label. Skip setter when unchanged; on change,
+        # blank-then-set forces Label to fully rebuild its glyph bitmap
+        # (Blinka adafruit_display_text leaves residue on plain reassignment).
+        self._label_text_cache: Dict[int, str] = {}
 
     def cancel(self) -> None:
         self._stop.set()
@@ -222,6 +226,20 @@ class Display(threading.Thread):
         self._primary_group = primary
         self.display.root_group = primary
 
+    def _set_label_text(self, lbl: Optional[label.Label], new_text: str) -> None:
+        """Update label text only if changed. Blank-then-set forces Label
+        to fully rebuild its glyph bitmap (Blinka displayio leaves residue
+        from prior text on plain reassignment, even with background_color).
+        """
+        if lbl is None:
+            return
+        key = id(lbl)
+        if self._label_text_cache.get(key) == new_text:
+            return
+        lbl.text = ""
+        lbl.text = new_text
+        self._label_text_cache[key] = new_text
+
     def _update_charge_fill(self, fill_height: int) -> None:
         """Redraw charge fill bitmap only when value changes."""
         if fill_height == self._last_fill_height:
@@ -261,16 +279,11 @@ class Display(threading.Thread):
                     cur_time = "Time: "
 
                 # Mutate label text in place — no Group/Bitmap allocations.
-                if self._gps_mode_label is not None:
-                    self._gps_mode_label.text = gps_mode
-                if self._lat_label is not None:
-                    self._lat_label.text = pos_lat
-                if self._lon_label is not None:
-                    self._lon_label.text = pos_lon
-                if self._sats_label is not None:
-                    self._sats_label.text = sats
-                if self._time_label is not None:
-                    self._time_label.text = cur_time
+                self._set_label_text(self._gps_mode_label, gps_mode)
+                self._set_label_text(self._lat_label, pos_lat)
+                self._set_label_text(self._lon_label, pos_lon)
+                self._set_label_text(self._sats_label, sats)
+                self._set_label_text(self._time_label, cur_time)
 
                 # Drain NUT queue (latest only)
                 if not self.nut_queue.empty():
@@ -285,8 +298,7 @@ class Display(threading.Thread):
                 )
                 self._update_charge_fill(fill_height)
 
-                if self._status_label is not None:
-                    self._status_label.text = status
+                self._set_label_text(self._status_label, status)
 
                 self.display.refresh()
             except Exception:
