@@ -8,7 +8,8 @@ import busio
 import displayio
 import fourwire
 import terminalio
-from adafruit_display_text import label
+import vectorio
+from adafruit_display_text import bitmap_label, label
 import adafruit_displayio_sh1106
 from gpsd2 import GpsResponse
 
@@ -69,16 +70,15 @@ class Display(threading.Thread):
 
         self._splash_group: Optional[displayio.Group] = None
         self._primary_group: Optional[displayio.Group] = None
-        self._gps_mode_label: Optional[label.Label] = None
-        self._lat_label: Optional[label.Label] = None
-        self._lon_label: Optional[label.Label] = None
-        self._sats_label: Optional[label.Label] = None
-        self._time_label: Optional[label.Label] = None
-        self._status_label: Optional[label.Label] = None
-        self._charge_fill_bitmap: Optional[displayio.Bitmap] = None
-        # Cache last text per label. Skip setter when unchanged; on change,
-        # blank-then-set forces Label to fully rebuild its glyph bitmap
-        # (Blinka adafruit_display_text leaves residue on plain reassignment).
+        self._gps_mode_label: Optional[bitmap_label.Label] = None
+        self._lat_label: Optional[bitmap_label.Label] = None
+        self._lon_label: Optional[bitmap_label.Label] = None
+        self._sats_label: Optional[bitmap_label.Label] = None
+        self._time_label: Optional[bitmap_label.Label] = None
+        self._status_label: Optional[bitmap_label.Label] = None
+        self._charge_fill_rect: Optional[vectorio.Rectangle] = None
+        # Cache last text per label keyed by id(); skip .text setter when
+        # unchanged to avoid unnecessary BitmapLabel bitmap rebuilds.
         self._label_text_cache: Dict[int, str] = {}
 
     def cancel(self) -> None:
@@ -115,7 +115,7 @@ class Display(threading.Thread):
 
     def _build_primary_scene(self) -> None:
         """Build the per-frame scene graph ONCE. Per-frame code mutates
-        label.text and the charge fill bitmap in place — no allocations."""
+        label.text and charge fill rect dimensions in place — no allocations."""
         primary = displayio.Group()
 
         # Outer white fill
@@ -132,17 +132,19 @@ class Display(threading.Thread):
             displayio.TileGrid(inner_bitmap, pixel_shader=inner_palette, x=4, y=1)
         )
 
-        # GPS labels. background_color forces opaque black behind glyphs
-        # so .text setter rebuild does not leave residue from prior text.
-        self._gps_mode_label = label.Label(
+        # GPS labels — bitmap_label.Label (single bitmap fully redrawn on
+        # text change). Plain label.Label leaves per-char TileGrid residue
+        # at left edge of bbox when text shrinks/grows on Blinka displayio.
+        # background_color stays as defence-in-depth.
+        self._gps_mode_label = bitmap_label.Label(
             terminalio.FONT,
             text="Mode: ",
             color=0xFFFFFF,
             background_color=0x000000,
-            x=2,
+            x=7,
             y=9,
         )
-        self._lat_label = label.Label(
+        self._lat_label = bitmap_label.Label(
             terminalio.FONT,
             text="Lat: ",
             color=0xFFFFFF,
@@ -150,7 +152,7 @@ class Display(threading.Thread):
             x=7,
             y=19,
         )
-        self._lon_label = label.Label(
+        self._lon_label = bitmap_label.Label(
             terminalio.FONT,
             text="Lon: ",
             color=0xFFFFFF,
@@ -158,7 +160,7 @@ class Display(threading.Thread):
             x=7,
             y=29,
         )
-        self._sats_label = label.Label(
+        self._sats_label = bitmap_label.Label(
             terminalio.FONT,
             text="Sats: ",
             color=0xFFFFFF,
@@ -166,7 +168,7 @@ class Display(threading.Thread):
             x=7,
             y=39,
         )
-        self._time_label = label.Label(
+        self._time_label = bitmap_label.Label(
             terminalio.FONT,
             text="Time: ",
             color=0xFFFFFF,
@@ -196,24 +198,21 @@ class Display(threading.Thread):
             displayio.TileGrid(inline_bitmap, pixel_shader=inline_palette, x=107, y=7)
         )
 
-        # Charge fill: fixed-size 8x26 bitmap. Pixels mutated per-update.
-        # Palette: 0=black, 1=white. Initially all-black (0% charge look).
-        fill_palette = displayio.Palette(2)
-        fill_palette[0] = 0x000000
-        fill_palette[1] = 0xFFFFFF
-        self._charge_fill_bitmap = displayio.Bitmap(
-            self.CHARGE_FILL_W, self.CHARGE_FILL_H, 2
+        # Charge fill: vectorio.Rectangle (single white rect, dynamic
+        # height anchored at gauge bottom). Avoids 2-value Bitmap 1bpp
+        # bit-packing bug in Blinka displayio that produced cross-hatch.
+        fill_palette = displayio.Palette(1)
+        fill_palette[0] = 0xFFFFFF
+        self._charge_fill_rect = vectorio.Rectangle(
+            pixel_shader=fill_palette,
+            width=self.CHARGE_FILL_W,
+            height=1,
+            x=self.CHARGE_FILL_X,
+            y=self.CHARGE_FILL_Y + self.CHARGE_FILL_H - 1,
         )
-        primary.append(
-            displayio.TileGrid(
-                self._charge_fill_bitmap,
-                pixel_shader=fill_palette,
-                x=self.CHARGE_FILL_X,
-                y=self.CHARGE_FILL_Y,
-            )
-        )
+        primary.append(self._charge_fill_rect)
 
-        self._status_label = label.Label(
+        self._status_label = bitmap_label.Label(
             terminalio.FONT,
             text="",
             color=0xFFFFFF,
@@ -226,32 +225,27 @@ class Display(threading.Thread):
         self._primary_group = primary
         self.display.root_group = primary
 
-    def _set_label_text(self, lbl: Optional[label.Label], new_text: str) -> None:
-        """Update label text only if changed. Blank-then-set forces Label
-        to fully rebuild its glyph bitmap (Blinka displayio leaves residue
-        from prior text on plain reassignment, even with background_color).
+    def _set_label_text(self, lbl: Optional[bitmap_label.Label], new_text: str) -> None:
+        """Update label text only if changed. BitmapLabel fully rebuilds
+        its single bitmap on .text setter, so plain reassignment is safe.
         """
         if lbl is None:
             return
         key = id(lbl)
         if self._label_text_cache.get(key) == new_text:
             return
-        lbl.text = ""
         lbl.text = new_text
         self._label_text_cache[key] = new_text
 
     def _update_charge_fill(self, fill_height: int) -> None:
-        """Redraw charge fill bitmap only when value changes."""
+        """Resize charge fill rect anchored at gauge bottom."""
         if fill_height == self._last_fill_height:
             return
-        bm = self._charge_fill_bitmap
-        if bm is None:
+        rect = self._charge_fill_rect
+        if rect is None:
             return
-        threshold = self.CHARGE_FILL_H - fill_height
-        for y in range(self.CHARGE_FILL_H):
-            val = 1 if y >= threshold else 0
-            for x in range(self.CHARGE_FILL_W):
-                bm[x, y] = val
+        rect.height = fill_height
+        rect.y = self.CHARGE_FILL_Y + self.CHARGE_FILL_H - fill_height
         self._last_fill_height = fill_height
 
     def _display_loop(self) -> None:
