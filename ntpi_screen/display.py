@@ -139,7 +139,7 @@ class Display(threading.Thread):
             text="Mode: ",
             color=0xFFFFFF,
             background_color=0x000000,
-            x=7,
+            x=2,
             y=9,
         )
         self._lat_label = label.Label(
