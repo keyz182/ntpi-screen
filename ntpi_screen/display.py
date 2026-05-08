@@ -1,7 +1,9 @@
 import logging
 import queue
 import threading
+from datetime import datetime
 from typing import Dict, Optional
+from zoneinfo import ZoneInfo
 
 import board
 import busio
@@ -12,6 +14,8 @@ import vectorio
 from adafruit_display_text import bitmap_label, label
 import adafruit_displayio_sh1106
 from gpsd2 import GpsResponse
+
+LONDON_TZ = ZoneInfo("Europe/London")
 
 logger = logging.getLogger(__name__)
 
@@ -260,11 +264,16 @@ class Display(threading.Thread):
                     pos_lat = f"Lat: {self.last_gps_reading.lat:.6f}"
                     pos_lon = f"Lon: {self.last_gps_reading.lon:.6f}"
                     sats = f"Sats: {self.last_gps_reading.sats_valid}/{self.last_gps_reading.sats}"
-                    split = self.last_gps_reading.time.split("T")
-                    date_part = split[0] if len(split) > 0 else ""
-                    time_part = split[1].split(".")[0] if len(split) > 1 else ""
-                    cur_time = f"Time: {time_part}"
-                    _ = date_part  # currently unused on screen; kept for parity
+                    # gpsd reports UTC like "2026-05-08T18:08:23.000Z".
+                    # Convert to Europe/London (BST in summer, GMT in winter).
+                    try:
+                        utc_dt = datetime.fromisoformat(
+                            self.last_gps_reading.time.replace("Z", "+00:00")
+                        )
+                        local_dt = utc_dt.astimezone(LONDON_TZ)
+                        cur_time = f"Time: {local_dt.strftime('%H:%M:%S')}"
+                    except (ValueError, AttributeError):
+                        cur_time = "Time: "
                 else:
                     gps_mode = "Mode: "
                     pos_lat = "Lat: "
